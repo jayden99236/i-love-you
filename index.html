@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>I Love You</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: full-screen black canvas — "I love you" in many languages traces a heart outline, then packs it full, in red and blue */
+:root {
+  --bg: #000000;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+
+<canvas id="c" role="img" aria-label="A red and blue heart made of the words I love you in many languages"></canvas>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  const settled = document.createElement('canvas');   // finished words are drawn here once
+  const sctx = settled.getContext('2d');
+
+  const PHRASES = [
+    'I love you', 'Te amo', "Je t'aime", 'Ich liebe dich', 'Ti amo', 'Eu te amo',
+    'Ik hou van jou', 'Jag älskar dig', 'Jeg elsker deg', 'Kocham cię', 'Я тебя люблю',
+    'Seni seviyorum', '我爱你', '愛してる', '사랑해', "Σ' αγαπώ", 'Anh yêu em',
+    'Aku cinta kamu', 'ฉันรักเธอ', 'मैं तुमसे प्यार करता हूँ', 'أحبك', 'אני אוהב אותך',
+    'Mahal kita', 'Nakupenda', 'Ek het jou lief', 'Mi amas vin', 'Szeretlek',
+    'Te iubesc', 'Volim te', 'Miluji tě', 'Ég elska þig', 'Minä rakastan sinua',
+    'Is breá liom tú', 'Saya cintakan awak', 'I love you', 'I love you'
+  ];
+  const SHORT = ['I love you', 'Te amo', 'Ti amo', '사랑해', '我爱你', 'أحبك', 'Volim te', 'Szeretlek', '愛してる', 'Mahal kita'];
+  const FONT = (s) => `700 ${s}px system-ui, "Segoe UI", "Helvetica Neue", Arial, "Noto Sans", sans-serif`;
+
+  const RED  = [255, 45, 63];
+  const BLUE = [61, 130, 255];
+  const FLASH = [255, 235, 240];
+  const ANIM_MS = 650;
+
+  let W, H, S, cx, cy, poly, heartPath, items, live, outlineT, phase, fails, doneAt, fadeOut, nextAt, dpr;
+
+  const hx = (t) => 16 * Math.pow(Math.sin(t), 3);
+  const hy = (t) => 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+  const toScreen = (t) => [cx + hx(t) * S, cy - hy(t) * S];
+
+  function inHeart(x, y) {   // ray casting against the heart outline, in CSS pixels
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  function setup() {
+    dpr = window.devicePixelRatio || 1;
+    W = cv.clientWidth; H = cv.clientHeight;
+    for (const c of [cv, settled]) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+    S = Math.min((W - 32) / 36, (H - 32) / 33);
+    cx = W / 2;
+    cy = H / 2 - 2.5 * S;
+    poly = [];
+    heartPath = new Path2D();
+    for (let i = 0; i <= 300; i++) {
+      const p = toScreen((i / 300) * Math.PI * 2);
+      poly.push(p);
+      i ? heartPath.lineTo(p[0], p[1]) : heartPath.moveTo(p[0], p[1]);
+    }
+    heartPath.closePath();
+    restart(performance.now());
+  }
+
+  function restart(now) {
+    items = []; live = []; outlineT = 0; phase = 'outline'; fails = 0; fadeOut = 1; nextAt = now;
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.clearRect(0, 0, settled.width, settled.height);
+  }
+
+  function fits(b) {
+    for (const o of items) {
+      if (b.x < o.x + o.w + 1 && b.x + b.w + 1 > o.x && b.y < o.y + o.h && b.y + b.h > o.y) return false;
+    }
+    return true;
+  }
+
+  function boxInside(b) {
+    const my = b.y + b.h / 2;
+    // edge midpoints only, so words can tuck right up against the outline
+    return inHeart(b.x + 1, my) && inHeart(b.x + b.w - 1, my) &&
+           inHeart(b.x + b.w / 2, b.y) && inHeart(b.x + b.w / 2, b.y + b.h);
+  }
+
+  function make(text, size, px, py, born) {
+    ctx.font = FONT(size);
+    const w = ctx.measureText(text).width, h = size * 0.8;   // tight to the letters, not the line
+    const blue = text !== 'I love you' && Math.random() < 0.35;
+    return { text, size, x: px - w / 2, y: py - h / 2, w, h, born, color: blue ? BLUE : RED };
+  }
+
+  // shrink words as the heart gets crowded so the gaps fill in completely
+  function fillSize() {
+    const crowd = Math.min(1, fails / 60);
+    return Math.max(6, S * (0.36 + Math.random() * 0.34) * (1 - crowd * 0.65));
+  }
+
+  function addOne(now) {
+    if (phase === 'outline') {
+      const text = PHRASES[Math.floor(Math.random() * PHRASES.length)];
+      const size = Math.max(9, S * (0.45 + Math.random() * 0.3));
+      while (outlineT < Math.PI * 2) {
+        const [px, py] = toScreen(outlineT);
+        outlineT += 0.003;
+        const it = make(text, size, px, py, now);
+        if (fits(it)) { items.push(it); live.push(it); return true; }
+      }
+      phase = 'fill';
+    }
+    const pool = fails > 30 ? SHORT : PHRASES;
+    const text = pool[Math.floor(Math.random() * pool.length)];
+    const size = fillSize();
+    for (let tries = 0; tries < 140; tries++) {
+      const px = cx + (Math.random() * 2 - 1) * 16 * S;
+      const py = cy + (Math.random() * 29 - 12) * S;
+      const it = make(text, size, px, py, now);
+      if (boxInside(it) && fits(it)) { items.push(it); live.push(it); fails = Math.max(0, fails - 1); return true; }
+    }
+    return ++fails < 150;
+  }
+
+  const ease = (k) => 1 - Math.pow(1 - k, 3);
+
+  function paint(c, it, k) {
+    const col = it.color.map((v, i) => Math.round(FLASH[i] + (v - FLASH[i]) * k));
+    const scale = 0.7 + 0.3 * ease(k);
+    c.save();
+    c.globalAlpha = Math.min(1, k * 1.8) * fadeOut;
+    c.translate(it.x + it.w / 2, it.y + it.h / 2);
+    c.scale(scale, scale);
+    c.font = FONT(it.size);
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.shadowColor = `rgba(${it.color[0]},${it.color[1]},${it.color[2]},0.5)`;
+    c.shadowBlur = 5;
+    c.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
+    c.fillText(it.text, 0, 0);
+    c.restore();
+  }
+
+  function draw(now) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.globalAlpha = fadeOut;
+    ctx.drawImage(settled, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const still = [];
+    for (const it of live) {
+      const k = Math.min(1, (now - it.born) / ANIM_MS);
+      if (k >= 1) { const f = fadeOut; fadeOut = 1; paint(sctx, it, 1); fadeOut = f; }
+      else { paint(ctx, it, ease(k)); still.push(it); }
+    }
+    live = still;
+  }
+
+  function loop(now) {
+    if (phase !== 'done') {
+      // steady rhythm: outline one word at a time, fill speeds up as it goes
+      const gap = phase === 'outline' ? 45 : Math.max(8, 26 - items.length / 30);
+      let budget = 4;
+      while (now >= nextAt && budget-- > 0) {
+        if (!addOne(nextAt)) { phase = 'done'; doneAt = now; break; }
+        nextAt += gap;
+      }
+      if (now - nextAt > 200) nextAt = now;   // tab was hidden: don't burst
+    } else if (now - doneAt > 6000) {
+      fadeOut = Math.max(0, 1 - (now - doneAt - 6000) / 1200);
+      if (fadeOut === 0) restart(now);
+    }
+    draw(now);
+    requestAnimationFrame(loop);
+  }
+
+  let resizeTimer;
+  addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(setup, 200); });
+  setup();
+
+  if (reduce) {
+    while (addOne(-1e9)) {}
+    draw(0);
+    addEventListener('resize', () => setTimeout(() => { while (addOne(-1e9)) {} draw(0); }, 250));
+  } else {
+    requestAnimationFrame(loop);
+  }
+})();
+</script>
+</body>
+</html>
